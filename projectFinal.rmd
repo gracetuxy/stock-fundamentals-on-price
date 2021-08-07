@@ -1,0 +1,211 @@
+---
+title: "project 306"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+Scatter plots and boxplots provide a general view of data.
+
+**Exploring the Data**
+
+In this section, we can briefly explore the data we have, and generate some plots of various explanatory variables against the output values, which in this case, are the current years share price.
+
+```{r cars}
+data <- read.csv("Tech_Datasetv2.csv")
+data
+plot(data$epspx1year,data$Values, ylab = "Values(dollars/share)")
+plot(data$dvt1year,data$Values, ylab = "Values(dollars/share)")
+plot(data$ebitda1year,data$Values, ylab = "Values(dollars/share)")
+plot(data$prcc_f1year,data$Values, ylab = "Values(dollars/share)")
+plot(data$revt1year,data$Values, ylab = "Values(dollars/share)")
+
+boxplot(Values~tic,data=data)
+
+
+
+```
+From these plots, we can extract a number of valuable insights. 
+1) We see that in a lot of cases, data points are very concentrated near the bottom left of the plots, whereas there are only a few data points that span a much larger range. At first glance, these do somewhat look like they could be outliers. However, given the high growth potential of the companies we are seeing, we do run the first of high spread in our data - which is exactly what we are seeing. 
+
+To deal with this problem we did consider applying transformations such as square root or log transformations to the explanatory variables which showed this pattern such as revenue, ebitda, and EPS. We could also attempt to square the values, just to be thorough. The one issue here (log/sqrt) is that negative values are possible for both EPS and EBITDA, therefore we apply a normalization technique to map values between 0 to 1. This is necessary to ensure that all values are positive.
+
+Regarding dividends, we see that many of the data points are 0. This is because some of the companies chosen do not give out dividends at all. As a result, we do not expect this parameter to be at all helpful in our analysis.
+
+Finally, we see that when we plot the boxplot of company ticker against price value, that there are differences, but the differences do not appear to be very large. In addition, we hesitate to add ticker as a categorical variable because ultimately we are trying to use a companies fundamental indicators to predict price in a sector. Changing our prediction based of an individual company does not help us achieve this.
+
+
+```{r}
+#Map EPS and EBITDA between 0 and 1 to make all values positive
+data$epspx1year = (data$epspx1year-min(data$epspx1year))/(max(data$epspx1year) - min(data$epspx1year))
+data$ebitda1year= (data$ebitda1year-min(data$ebitda1year))/(max(data$ebitda1year) - min(data$ebitda1year))
+
+```
+
+
+
+## Including Plots
+Plots of the correlation between all variables
+
+```{r pressure, echo=FALSE}
+drops <- c("cik1year")
+sub <- data[ , !(names(data) %in% drops)]
+sub <- subset(data, select = - cik1year)
+sub1 <- subset(sub, select = - tic)
+sub1
+cormat <- cor(sub1)
+cormat
+#install.packages("ggcorrplot")
+library("ggcorrplot")
+ggcorrplot(cormat, hc.order = TRUE, type = "lower",
+   lab = TRUE)
+#install.packages("GGally")
+library(GGally)
+ggpairs(sub1)
+```
+Using the above correlation heatmap, we can give a thorough look to any possible strong correlations between our explanatory variables which could give rise to issues stemming from multicollinearity. We see that some strong correlations are present such as EBITDA with revenue and EPS with the share price at the time of measurement. Otherwise, we see some correlation between many of the explanatory variables, that are worth noting.
+
+In addition, from preliminary results, we can generate hypotheses about which factors we expect to be the most influential by looking at which explanatory variables are most correlated with "Values" or the current share price. The strongest factors are EPS with a 1 year lag and last year's price. 
+
+We do acknowledge that there are lots of factors that do  show correlations, and therefore in our further analysis we make sure to not include all parameters, only those that produce the best models.
+
+
+
+We generally fit with all covariates 
+```{r} 
+library(leaps)
+data$epspx1year = (data$epspx1year-min(data$epspx1year))/(max(data$epspx1year) - min(data$epspx1year))
+data$ebitda1year= (data$ebitda1year-min(data$ebitda1year))/(max(data$ebitda1year) - min(data$ebitda1year))
+
+#Fit first model -> not our best one, just to get an idea + prelim look
+model1 <- lm(Values~fyear + epspx1year + dvt1year+ebitda1year +prcc_f1year + revt1year,data=data)
+summary(model1)
+AIC(model1,k = 2)
+# plot(model1)
+#Adjusted R-squared:  0.9089 
+#AIC:949.8683
+
+#Apply regsubsets
+# best<-regsubsets(Values~ fyear + epspx1year +dvt1year+ebitda1year +prcc_f1year + revt1year ,data=data)
+# summary(best)$which
+
+best<-regsubsets(Values~ fyear + I(epspx1year^2) + epspx1year + sqrt(epspx1year) + dvt1year + I(ebitda1year^2) + ebitda1year + sqrt(ebitda1year) + prcc_f1year + revt1year + log(revt1year) + I(revt1year^2) + sqrt(revt1year) ,data=data, nvmax = 13)
+
+#best<-regsubsets(Values~ fyear + I(epspx1year^2) + epspx1year + sqrt(epspx1year) + dvt1year+ I(ebitda1year^2) + sqrt(ebitda1year) + ebitda1year + log(ebitda1year) + log(revt1year) +prcc_f1year + revt1year + I(revt1year^2) + sqrt(revt1year),nvmax = 14,data=data)
+summary(best)$which
+
+Cp <- summary(best)$cp 
+Cp
+p <- c(2:14)
+plot(p,Cp,xlab = "p", ylab = "Cp Satistic")
+abline(a=0,b=1)
+```
+#As we can see that the significance of full model of each predicator variables, at 5% significance level, revt1year, epspx1year,dvt1year are not significant, the regsubsets give the same model as we remove the nonsinificant variables.
+
+Here, we see from the Cp plot that the lowest values appear to be 5, 6, 7, 8. Therefore, we will take all of these models to the "next stage" of analysis.
+
+We will take two different approaches to deciding which model is best:
+1) Using adj R2 and AIC
+2) Using "leave-one-out" cross-validation
+
+```{r}
+
+#Try fitting some other models - not related to the approaches talked about above
+
+
+# model5<-lm(Values~ epspx1year + fyear + sqrt(ebitda1year) +prcc_f1year + sqrt(revt1year) ,data=data)
+# model6<-lm(Values~ epspx1year + fyear + log(ebitda1year) +prcc_f1year + log(revt1year) ,data=data)
+# summary(model5)
+# plot(model5)
+# summary(model6)
+# plot(model6)
+# AIC(model5,k = 2)
+# AIC(model6,k = 2)
+# ebitda1year_new <- data$epspx1year-mean(data$epspx1year)
+# revt1year_new <- data$revt1year-mean(data$revt1year)
+# model7 <- lm(Values~ epspx1year + fyear + ebitda1year_new +prcc_f1year + revt1year_new ,data=data)
+# summary(model7)
+# plot
+# AIC(model7,k = 2)
+# #model5 : Adjusted R-squared:  0.9159 
+# #AIC:915.6202
+# #model6: Adjusted R-squared:  0.9177 
+# #AIC:913.4453
+# #model7: Adjusted R-squared:  0.9063
+# #AIC :950.9184
+# 
+
+
+```
+
+FINAL RESULTS SECTION
+
+```{r}
+#Fit models given from regsubsets
+#Give statistics for adjR2 and AIC
+model8 <- lm(Values~ fyear + I(epspx1year^2) + epspx1year + sqrt(epspx1year)+ prcc_f1year + log(revt1year) +I(revt1year^2) ,data=data)
+summary(model8) #7
+AIC(model8,k=2)
+#Adjusted R-squared:  0.792 
+#
+
+model9 <- lm(Values~ fyear + I(epspx1year^2) + epspx1year + sqrt(epspx1year) +ebitda1year + sqrt(ebitda1year) + prcc_f1year + I(revt1year^2) ,data=data)
+summary(model9)#8
+AIC(model9,k=2)
+
+model10 <- lm(Values~ fyear + I(epspx1year^2) + epspx1year + sqrt(epspx1year) +dvt1year +ebitda1year + sqrt(ebitda1year) + prcc_f1year + I(revt1year^2) ,data=data)
+summary(model10) #9 
+AIC(model10,k=2)
+
+model11 <- lm(Values~ fyear + I(epspx1year^2) + epspx1year + sqrt(epspx1year) +dvt1year +ebitda1year + sqrt(ebitda1year) + prcc_f1year + log(revt1year) + I(revt1year^2) ,data=data)
+summary(model11) #10
+AIC(model11,k=2)
+
+
+```
+
+
+
+
+```{r}
+#2) Fit generalized linear models and use leave one out cross val to find which is best
+
+model8 <- glm(Values~ fyear + I(epspx1year^2) + epspx1year + sqrt(epspx1year)+ prcc_f1year + log(revt1year) +I(revt1year^2) ,data=data)
+summary(model8)
+AIC(model8, k= 2)
+#Adjusted R-squared:  0.7872
+#AIC:1079.195
+model9 <- glm(Values~ fyear + I(epspx1year^2) + epspx1year + sqrt(epspx1year) +ebitda1year + sqrt(ebitda1year) + prcc_f1year + I(revt1year^2) ,data=data)
+summary(model9)
+AIC(model9,k=2)
+#Adjusted R-squared:  0.7885 
+#AIC:1079.491
+model10 <- glm(Values~ fyear + I(epspx1year^2) + epspx1year + sqrt(epspx1year) +dvt1year +ebitda1year + sqrt(ebitda1year) + prcc_f1year + I(revt1year^2) ,data=data)
+summary(model10)
+AIC(model10,k=2)
+#Adjusted R-squared:  0.7868
+#AIC:1081.251
+model11 <- glm(Values~ fyear + I(epspx1year^2) + epspx1year + sqrt(epspx1year) +dvt1year +ebitda1year + sqrt(ebitda1year) + prcc_f1year + log(revt1year) + I(revt1year^2) ,data=data)
+summary(model11)
+AIC(model11,k=2)
+#Adjusted R-squared:  0.7917 
+#AIC:1079.761
+library(boot)
+
+#Apply leave-one-out approach
+nRows <- nrow(data)
+crossVal5 <- cv.glm(data, model8, K = nRows)
+crossVal6 <- cv.glm(data, model9, K = nRows)
+crossVal7 <- cv.glm(data, model10, K = nRows)
+crossVal8 <- cv.glm(data, model11, K = nRows)
+#Output results
+print(c(crossVal5$delta[1], crossVal6$delta[1], crossVal7$delta[1],crossVal8$delta[1]))
+
+
+
+```
+From these results, we can see that the lowest RMSE comes from model 8. Note/comment how this is a different conclusion from the adj R2/AIC method.
+
